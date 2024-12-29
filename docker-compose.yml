@@ -1,0 +1,117 @@
+networks:
+  custom_network:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 10.10.10.0/24
+        - subnet: fd00:bbbb:cccc:dddd::/64
+    name: custom_network
+services:
+  pgbackup:
+    container_name: pgbackup
+    depends_on:
+      - postgres
+    env_file:
+      - ./config/pgbackup.env
+      - ./config/postgres.env
+    image: ghcr.io/realchandan/pgbackup:latest
+    networks:
+      custom_network:
+        ipv4_address: 10.10.10.110
+        ipv6_address: fd00:bbbb:cccc:dddd::110
+    restart: always
+  pgbouncer:
+    container_name: pgbouncer
+    depends_on:
+      - postgres
+    deploy:
+      resources:
+        limits:
+          memory: 512MB
+    image: ghcr.io/realchandan/pgbouncer:1.23.1
+    labels:
+      - traefik.enable=true
+      - traefik.tcp.routers.pgbouncer.entrypoints=port5432
+      - traefik.tcp.routers.pgbouncer.rule=HostSNI(`$POSTGRES_DOMAIN`)
+      - traefik.tcp.routers.pgbouncer.tls.certresolver=certresolver
+      - traefik.tcp.routers.pgbouncer.tls=true
+      - traefik.tcp.services.pgbouncer.loadbalancer.server.port=6432
+    networks:
+      custom_network:
+        ipv4_address: 10.10.10.105
+        ipv6_address: fd00:bbbb:cccc:dddd::105
+    restart: always
+    volumes:
+      - ./config/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini
+  postgres:
+    command: "-c config_file=/etc/conf/postgresql.conf"
+    container_name: postgres
+    deploy:
+      resources:
+        limits:
+          memory: 4GB
+    env_file: ./config/postgres.env
+    healthcheck:
+      interval: 5s
+      retries: 5
+      test:
+        - CMD-SHELL
+        - pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}
+      timeout: 5s
+    image: postgres:17-alpine
+    networks:
+      custom_network:
+        ipv4_address: 10.10.10.100
+        ipv6_address: fd00:bbbb:cccc:dddd::100
+    restart: always
+    volumes:
+      - ./config/pg/scripts:/docker-entrypoint-initdb.d:ro
+      - ./config/pg/conf:/etc/conf:ro
+      - postgres_data:/var/lib/postgresql/data
+  traefik:
+    command:
+      - "--certificatesresolvers.certresolver.acme.email=$ACME_EMAIL"
+      - "--certificatesresolvers.certresolver.acme.storage=/certs/acme.json"
+      - "--certificatesresolvers.certresolver.acme.tlschallenge=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.websecure.address=:443"
+      - "--entrypoints.websecure.http3=true"
+      - "--log.level=INFO"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.port5432.address=:5432"
+      - "--providers.file.filename=/etc/traefik-dynamic.yml"
+      - "--providers.file.watch=true"
+      - traefik.docker.network=custom_network
+    container_name: traefik
+    image: traefik:v3.2.3
+    networks:
+      custom_network: null
+    ports:
+      - mode: host
+        published: 80
+        target: 80
+      - mode: host
+        protocol: tcp
+        published: 443
+        target: 443
+      - mode: host
+        protocol: udp
+        published: 443
+        target: 443
+      - mode: host
+        protocol: tcp
+        published: 5432
+        target: 5432
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./config/traefik-dynamic.yml:/etc/traefik-dynamic.yml:ro
+      - certs_data:/certs:rw
+volumes:
+  certs_data: null
+  postgres_data: null

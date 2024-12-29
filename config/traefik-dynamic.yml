@@ -1,0 +1,10 @@
+tls:
+  options:
+    default:
+      sniStrict: true
+      alpnProtocols:
+        - acme-tls/1
+        - h2
+        - h3
+        - http/1.1
+        - postgresql
